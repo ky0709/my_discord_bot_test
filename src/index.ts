@@ -1,4 +1,15 @@
-import { AzureFunction, Context, HttpRequest } from "@azure/functions";
+import { HttpRequest } from "@azure/functions";
+// Define Context type locally if needed
+type Context = {
+  log: (...args: any[]) => void;
+  res?: {
+    status?: number;
+    headers?: { [key: string]: string };
+    body?: any;
+  };
+};
+
+type AzureFunction = (context: Context, req: HttpRequest) => Promise<void>;
 import {
   InteractionType,
   InteractionResponseType,
@@ -12,30 +23,30 @@ const httpTrigger: AzureFunction = async function (
 ): Promise<void> {
   const sig = req.headers["x-signature-ed25519"];
   const time = req.headers["x-signature-timestamp"];
-  const isValid = await verifyKey(req.rawBody, sig, time, CLIENT_PUBLIC_KEY);
+  const rawBody = req.body ? await streamToString(req.body) : "";
+  const isValid = await verifyKey(rawBody, sig, time, CLIENT_PUBLIC_KEY);
 
   if (!isValid) {
     context.res = {
       status: 401,
-      Headers: {},
+      headers: {
+      "Content-Type": "application/json",
+      },
       body: JSON.stringify({
-        data: {
-          content: `${sig},${time}`,
-        },
+      error: "Invalid request signature",
       }),
     };
     return;
   }
 
-  const interaction = req.body;
+  const interaction = JSON.parse(rawBody);
   if (interaction && interaction.type === InteractionType.APPLICATION_COMMAND) {
-    const option = req.body.data.options[0].value;
-    const username = req.body.member.user.username;
+    const option = interaction.data.options[0].value;
+    const username = interaction.member.user.username;
     const not = option == "yes" ? "" : "'t";
 
     context.res = {
       status: 200,
-      method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
@@ -54,5 +65,19 @@ const httpTrigger: AzureFunction = async function (
     };
   }
 };
+
+function streamToString(stream: ReadableStream): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let result = "";
+
+  return reader.read().then(function processText({ done, value }): any {
+    if (done) {
+      return result;
+    }
+    result += decoder.decode(value, { stream: true });
+    return reader.read().then(processText);
+  });
+}
 
 export default httpTrigger;
